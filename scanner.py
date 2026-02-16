@@ -66,7 +66,10 @@ def scan_file(path: Path):
 
 def main():
     root = Path(os.environ.get("GITHUB_WORKSPACE", "."))
-    markdown_files = list(root.rglob("*.md"))
+    markdown_files = [
+        p for p in root.rglob("*")
+            if p.is_file() and p.suffix.lower() == ".md"
+    ]
 
     if not markdown_files:
         print("No markdown files found.")
