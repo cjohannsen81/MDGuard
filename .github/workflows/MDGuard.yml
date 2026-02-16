@@ -9,4 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ./markdown-malware-scan
+
+      - name: Run MDGuard
+        uses: ./
