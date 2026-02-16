@@ -1,6 +1,7 @@
 FROM cgr.dev/chainguard/python:latest
 
-WORKDIR /app
-COPY scanner.py /app/scanner.py
+WORKDIR /github/workspace
 
-ENTRYPOINT ["python", "/app/scanner.py"]
+COPY scanner.py /github/workspace/scanner.py
+
+ENTRYPOINT ["python", "/github/workspace/scanner.py"]
