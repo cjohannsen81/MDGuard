@@ -1,0 +1,9 @@
+name: Markdown Malware Scanner
+description: Scan Markdown files for hidden malware
+branding:
+  icon: shield
+  color: red
+
+runs:
+  using: docker
+  image: Dockerfile
