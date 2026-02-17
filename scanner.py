@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2024 MDGuard Contributors
 """
 Markdown Security Scanner
 Detects hidden comments, embedded malware indicators, and suspicious content
@@ -162,6 +164,60 @@ RULES = [
         "remediation": "Remove all javascript: URIs.",
         "scan_code_blocks": False,
     },
+    {
+        "id": "MD014",
+        "severity": Severity.HIGH,
+        "title": "Unicode-escaped JavaScript URI",
+        "description": "JavaScript URIs encoded with Unicode escapes (\\uXXXX) can bypass simple pattern detection.",
+        "pattern": re.compile(r'\\u006[aA]\\u0061\\u0076\\u0061\\u0073\\u0063\\u0072\\u0069\\u0070\\u0074'),
+        "remediation": "Remove all encoded javascript: URIs and the links containing them.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD015",
+        "severity": Severity.CRITICAL,
+        "title": "SVG image with potential script content",
+        "description": "SVG images can contain embedded JavaScript that executes when rendered.",
+        "pattern": re.compile(r'!\[.*?\]\(.*?\.svg\)|!\[.*?\]\(data:image/svg\+xml', re.IGNORECASE),
+        "remediation": "Verify SVG sources are trusted. Avoid data: URIs with SVG content.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD016",
+        "severity": Severity.HIGH,
+        "title": "HTML entity-encoded URL",
+        "description": "URLs encoded with HTML entities (&#XX;) can obfuscate malicious links.",
+        "pattern": re.compile(r'(?:href|src)\s*=\s*["\']?(?:&#\d+;){8,}', re.IGNORECASE),
+        "remediation": "Decode and verify the URL destination. Remove if malicious.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD017",
+        "severity": Severity.MEDIUM,
+        "title": "Non-HTTP protocol in autolink",
+        "description": "Protocols like file://, tel:, sms:, or custom schemes may be unexpected or risky.",
+        "pattern": re.compile(r'<(?:file|tel|sms|ftp|telnet|gopher|news|nntp|irc|mailto|facetime):.*?>', re.IGNORECASE),
+        "remediation": "Verify the protocol is intentional and safe for your use case.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD018",
+        "severity": Severity.MEDIUM,
+        "title": "HTML tag in Markdown table cell",
+        "description": "HTML inside table cells may not be properly escaped by all renderers.",
+        "pattern": re.compile(r'\|[^|\n]*<(?:img|script|iframe|object|embed|link|style|meta)[^>]*>[^|\n]*\|', re.IGNORECASE),
+        "remediation": "Remove HTML from table cells or verify renderer escapes it properly.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD019",
+        "severity": Severity.MEDIUM,
+        "title": "Shell command in footnote",
+        "description": "Shell commands placed in footnotes may be less visible during review.",
+        "pattern": re.compile(r'\[\^[^\]]+\]:\s*.*?(?:curl|wget|bash|sh|powershell|eval)\s+', re.IGNORECASE),
+        "remediation": "Move critical commands to main content or add prominent warnings.",
+        "scan_code_blocks": False,
+    },
 
     # ── Embedded Scripts & Code Injection ─────────────────────────────────
     {
@@ -227,15 +283,22 @@ RULES = [
     },
 
     # ── Credential & Secret Leakage ────────────────────────────────────────
-    # scan_code_blocks=True: real creds are dangerous regardless of context
     {
         "id": "MD030",
         "severity": Severity.CRITICAL,
         "title": "Hardcoded secret / API key pattern",
         "description": "Strings matching common API key patterns found in Markdown content.",
         "pattern": re.compile(
+            # Matches key=value only when the value is NOT an obvious placeholder.
+            # Excluded: your_*_here, <bracket>, YOUR_KEY, xxxx, changeme,
+            #           redacted, example, fake, test, dummy, placeholder, etc.
             r'(?:api[_-]?key|apikey|secret|token|password|passwd|pwd|'
-            r'private[_-]?key|access[_-]?key)\s*[:=]\s*["\']?[A-Za-z0-9/+_\-]{16,}["\']?',
+            r'private[_-]?key|access[_-]?key)\s*[:=]\s*'
+            r'(?!["\']?(?:your[_\-]|<[^>]+>|YOUR[_\-]|x{4,}|1{4,}|0{4,}|'
+            r'change_?me|changeme|redacted|example|fake|test_?|dummy|sample|'
+            r'insert|add_?here|placeholder|replace|update|enter|put_?your|'
+            r'none|null|n/a|tbd|todo))'
+            r'["\']?[A-Za-z0-9/+_\-]{16,}["\']?',
             re.IGNORECASE
         ),
         "remediation": "Rotate the exposed credential immediately and remove from the file.",
@@ -302,6 +365,78 @@ RULES = [
         "remediation": "Remove executable keys from YAML frontmatter.",
         "scan_code_blocks": False,
     },
+    {
+        "id": "MD051",
+        "severity": Severity.LOW,
+        "title": "Excessive blockquote nesting",
+        "description": "Deeply nested blockquotes (4+ levels) may hide content from review.",
+        "pattern": re.compile(r'^>{4,}', re.MULTILINE),
+        "remediation": "Reduce nesting depth or move hidden content to visible sections.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD052",
+        "severity": Severity.MEDIUM,
+        "title": "Markdown-style comment",
+        "description": "Comments using [//]: # syntax are invisible when rendered but present in raw text.",
+        "pattern": re.compile(r'^\[//\]:\s*#\s*\(.+\)', re.MULTILINE),
+        "remediation": "Remove Markdown-style comments or convert to visible documentation.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD053",
+        "severity": Severity.HIGH,
+        "title": "Nested executable keys in YAML frontmatter",
+        "description": "YAML keys like 'hooks:', 'plugins:', or nested 'command:' may execute code.",
+        "pattern": re.compile(
+            r'^\s*(?:hooks|plugins|pre_build|post_deploy|pre_commit|post_commit|command)\s*:',
+            re.MULTILINE | re.IGNORECASE
+        ),
+        "remediation": "Review all executable keys in frontmatter. Remove if not essential.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD054",
+        "severity": Severity.MEDIUM,
+        "title": "Suspicious link title attribute",
+        "description": "Link titles containing 'onclick', 'onerror', or tracking IDs may be malicious.",
+        "pattern": re.compile(r'\]\([^\)]+\s+"[^"]*(?:onclick|onerror|track|session|user[-_]?id)[^"]*"\)', re.IGNORECASE),
+        "remediation": "Remove suspicious content from link titles.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD055",
+        "severity": Severity.MEDIUM,
+        "title": "Misleading link label",
+        "description": "Link text suggests safety but URL points to IP, executable, or suspicious domain.",
+        "pattern": re.compile(
+            r'\[(?:safe|secure|official|verified|trusted|download)\]\([^)]*(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|\.(?:exe|bat|sh|ps1))[^)]*\)',
+            re.IGNORECASE
+        ),
+        "remediation": "Ensure link labels accurately reflect destination URLs.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD056",
+        "severity": Severity.HIGH,
+        "title": "Double-escaped HTML pattern",
+        "description": "Patterns like \\\\<script> may become dangerous after double-parsing.",
+        "pattern": re.compile(r'\\\\<(?:script|iframe|object|embed)', re.IGNORECASE),
+        "remediation": "Remove double-escaped HTML tags to prevent second-pass injection.",
+        "scan_code_blocks": False,
+    },
+    {
+        "id": "MD057",
+        "severity": Severity.LOW,
+        "title": "Temporary or time-based URL",
+        "description": "URLs containing dates or 'tmp' may expire and be hijacked.",
+        "pattern": re.compile(
+            r'https?://[^\s)]+(?:/tmp/|/temp/|\d{4}-\d{2}-\d{2}|(?:20|19)\d{2}[01]\d[0-3]\d)',
+            re.IGNORECASE
+        ),
+        "remediation": "Use permanent URLs or document expiration dates clearly.",
+        "scan_code_blocks": False,
+    },
 ]
 
 
@@ -309,15 +444,12 @@ RULES = [
 #  Content Preprocessing Helpers
 # ─────────────────────────────────────────────
 
-# Fenced code blocks (``` or ~~~, with optional language tag)
 _FENCE_RE = re.compile(
     r'^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*$',
     re.MULTILINE
 )
-# Inline code spans  (`...`) — single backtick, no newlines inside
 _INLINE_CODE_RE = re.compile(r'(?<!`)`(?!`)[^`\n]+`(?!`)')
 
-# Ignore directive patterns
 _IGNORE_LINE_RE        = re.compile(r'<!--\s*scanner-ignore(?:\s+([\w,\s]+?))?\s*-->', re.IGNORECASE)
 _IGNORE_BLOCK_START_RE = re.compile(r'<!--\s*scanner-ignore-block\s*-->',               re.IGNORECASE)
 _IGNORE_BLOCK_END_RE   = re.compile(r'<!--\s*scanner-ignore-end\s*-->',                 re.IGNORECASE)
@@ -336,15 +468,7 @@ def _build_code_block_mask(content: str) -> List[bool]:
 
 
 def _build_ignore_map(lines: List[str]) -> Dict[int, Optional[Set[str]]]:
-    """
-    Map 1-based line numbers → suppressed rule IDs (or None = suppress all).
-
-    Directives:
-      <!-- scanner-ignore -->               suppress all rules on the NEXT line
-      <!-- scanner-ignore MD020,MD022 -->   suppress named rules on the NEXT line
-      <!-- scanner-ignore-block -->         suppress all until scanner-ignore-end
-      <!-- scanner-ignore-end -->
-    """
+    """Map 1-based line numbers → suppressed rule IDs (or None = suppress all)."""
     ignore: Dict[int, Optional[Set[str]]] = {}
     in_block = False
 
@@ -360,7 +484,7 @@ def _build_ignore_map(lines: List[str]) -> Dict[int, Optional[Set[str]]]:
             continue
 
         if in_block:
-            ignore[lineno] = None   # suppress all
+            ignore[lineno] = None
             continue
 
         m = _IGNORE_LINE_RE.search(line)
@@ -372,11 +496,10 @@ def _build_ignore_map(lines: List[str]) -> Dict[int, Optional[Set[str]]]:
                 existing = ignore.get(next_lineno)
                 if existing is not None:
                     ignore[next_lineno] = existing | ids
-                # if existing is None (suppress all), leave it
                 elif next_lineno not in ignore:
                     ignore[next_lineno] = ids
             else:
-                ignore[next_lineno] = None   # suppress all
+                ignore[next_lineno] = None
 
     return ignore
 
@@ -412,21 +535,18 @@ def scan_file(filepath: str, severity_threshold: Severity = Severity.LOW) -> Lis
         for match in rule["pattern"].finditer(content):
             start = match.start()
 
-            # Skip if inside code and rule doesn't fire there
             if not scan_code and code_mask[start]:
                 continue
 
-            # Determine line/column
             line_num = content[:start].count("\n") + 1
             line_start = content.rfind("\n", 0, start) + 1
             col = start - line_start + 1
 
-            # Check suppress map
             suppressed = ignore_map.get(line_num)
             if line_num in ignore_map:
-                if suppressed is None:          # suppress all
+                if suppressed is None:
                     continue
-                if rule["id"] in suppressed:    # suppress this rule
+                if rule["id"] in suppressed:
                     continue
 
             raw_line = lines[line_num - 1] if line_num <= len(lines) else ""
@@ -571,7 +691,7 @@ def format_sarif(findings: List[Finding]) -> str:
         "version": "2.1.0",
         "runs": [{"tool": {"driver": {
             "name": "md-security-scanner",
-            "version": "1.1.0",
+            "version": "2.0.0",
             "informationUri": "https://github.com/your-org/md-security-scanner",
             "rules": rules,
         }}, "results": results}],
