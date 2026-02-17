@@ -3,6 +3,12 @@
 Markdown Security Scanner
 Detects hidden comments, embedded malware indicators, and suspicious content
 in Markdown files. Designed to run as a GitHub Action or standalone CLI tool.
+
+Suppression directives (place anywhere in your Markdown):
+  <!-- scanner-ignore -->                suppress ALL rules on the NEXT line
+  <!-- scanner-ignore MD020,MD022 -->    suppress specific rules on the NEXT line
+  <!-- scanner-ignore-block -->          suppress all rules until the closing tag
+  <!-- scanner-ignore-end -->            end a scanner-ignore-block
 """
 
 import re
@@ -11,8 +17,7 @@ import os
 import json
 import argparse
 import glob
-from dataclasses import dataclass, field, asdict
-from typing import Optional
+from dataclasses import dataclass, asdict
 from enum import Enum
 
 
@@ -45,25 +50,29 @@ class Finding:
 # ─────────────────────────────────────────────
 #  Detection Rules
 # ─────────────────────────────────────────────
+#
+#  "scan_code_blocks": False  → skip matches inside fenced/inline code
+#  "scan_code_blocks": True   → always fire (e.g. real credentials)
 
 RULES = [
     # ── Hidden / Obfuscated Comments ──────────────────────────────────────
-
     {
         "id": "MD001",
         "severity": Severity.MEDIUM,
         "title": "HTML comment found",
-        "description": "HTML comments (<!-- -->) inside Markdown can hide text from readers while it still exists in the raw file.",
-        "pattern": re.compile(r'<!--[\s\S]*?-->', re.DOTALL),
+        "description": "HTML comments (<!-- -->) can hide text from readers while still present in the raw file.",
+        "pattern": re.compile(r'<!--(?!.*scanner-ignore)[\s\S]*?-->', re.DOTALL),
         "remediation": "Remove or convert to standard Markdown comments if documentation is needed.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD002",
         "severity": Severity.HIGH,
         "title": "Zero-width character detected",
-        "description": "Zero-width spaces/joiners/non-joiners can be used to watermark text, hide data, or bypass keyword filters.",
+        "description": "Zero-width spaces/joiners/non-joiners can watermark text, hide data, or bypass keyword filters.",
         "pattern": re.compile(r'[\u200b\u200c\u200d\u2060\ufeff\u00ad]'),
         "remediation": "Strip all zero-width characters from the file.",
+        "scan_code_blocks": True,
     },
     {
         "id": "MD003",
@@ -72,12 +81,13 @@ RULES = [
         "description": "Non-ASCII lookalike characters (Cyrillic, Greek, etc.) can disguise URLs or keywords.",
         "pattern": re.compile(
             r'[àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ'
-            r'\u0400-\u04ff'   # Cyrillic
-            r'\u0370-\u03ff'   # Greek
-            r'\u2100-\u214f'   # Letterlike symbols
+            r'\u0400-\u04ff'
+            r'\u0370-\u03ff'
+            r'\u2100-\u214f'
             r']'
         ),
         "remediation": "Replace with standard ASCII characters where possible.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD004",
@@ -86,6 +96,7 @@ RULES = [
         "description": "Lines consisting entirely of whitespace may be used to pad files or hide content.",
         "pattern": re.compile(r'^[ \t]{5,}$', re.MULTILINE),
         "remediation": "Remove unnecessary whitespace lines.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD005",
@@ -94,6 +105,7 @@ RULES = [
         "description": "Large Base64 blobs can conceal binary payloads, scripts, or stolen data.",
         "pattern": re.compile(r'(?:[A-Za-z0-9+/]{40,}={0,2})'),
         "remediation": "Verify the Base64 content is intentional (e.g., image data). Remove if unexpected.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD006",
@@ -102,10 +114,10 @@ RULES = [
         "description": "Long hex strings may represent encoded payloads or shellcode.",
         "pattern": re.compile(r'\b(?:0x)?[0-9a-fA-F]{32,}\b'),
         "remediation": "Verify hex data is expected (e.g., a hash). Investigate and remove if unknown.",
+        "scan_code_blocks": False,
     },
 
     # ── Malicious URLs & Redirects ─────────────────────────────────────────
-
     {
         "id": "MD010",
         "severity": Severity.HIGH,
@@ -117,6 +129,7 @@ RULES = [
             re.IGNORECASE
         ),
         "remediation": "Expand and verify the full destination URL before using.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD011",
@@ -128,6 +141,7 @@ RULES = [
             re.IGNORECASE
         ),
         "remediation": "Replace with a proper domain name or remove entirely.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD012",
@@ -136,6 +150,7 @@ RULES = [
         "description": "data: URIs can embed and execute arbitrary content.",
         "pattern": re.compile(r'data:[a-z/+;]+;base64,', re.IGNORECASE),
         "remediation": "Remove data: URIs. Use hosted assets instead.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD013",
@@ -144,10 +159,10 @@ RULES = [
         "description": "javascript: URIs execute code in some renderers and are a common XSS vector.",
         "pattern": re.compile(r'javascript\s*:', re.IGNORECASE),
         "remediation": "Remove all javascript: URIs.",
+        "scan_code_blocks": False,
     },
 
     # ── Embedded Scripts & Code Injection ─────────────────────────────────
-
     {
         "id": "MD020",
         "severity": Severity.CRITICAL,
@@ -155,6 +170,7 @@ RULES = [
         "description": "<script> tags in Markdown may execute in certain renderers (e.g., GitHub Pages, Jekyll).",
         "pattern": re.compile(r'<script[\s>]', re.IGNORECASE),
         "remediation": "Remove all <script> tags from Markdown files.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD021",
@@ -163,14 +179,16 @@ RULES = [
         "description": "HTML event handlers (onload=, onclick=, etc.) are XSS vectors in rendered Markdown.",
         "pattern": re.compile(r'\bon\w+\s*=\s*["\']', re.IGNORECASE),
         "remediation": "Remove all inline event handlers.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD022",
         "severity": Severity.CRITICAL,
         "title": "Shell command injection pattern",
-        "description": "Backtick command substitution or $() in unexpected places may indicate injection attempts.",
+        "description": "Backtick command substitution or $() outside of inline code may indicate injection.",
         "pattern": re.compile(r'(?:`[^`\n]{10,}`|\$\([^)\n]{10,}\))'),
-        "remediation": "Audit shell commands in code blocks; ensure none execute outside intended contexts.",
+        "remediation": "Audit shell commands; ensure none execute outside intended contexts.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD023",
@@ -183,6 +201,7 @@ RULES = [
             re.IGNORECASE
         ),
         "remediation": "Remove immediately. This is a known malware dropper pattern.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD024",
@@ -194,6 +213,7 @@ RULES = [
             re.IGNORECASE
         ),
         "remediation": "Never pipe remote content to a shell. Download and inspect scripts first.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD025",
@@ -202,10 +222,11 @@ RULES = [
         "description": "eval() of dynamic content is a common code injection vector.",
         "pattern": re.compile(r'\beval\s*\(', re.IGNORECASE),
         "remediation": "Avoid eval(); use safer alternatives.",
+        "scan_code_blocks": False,
     },
 
     # ── Credential & Secret Leakage ────────────────────────────────────────
-
+    # scan_code_blocks=True: real creds are dangerous regardless of context
     {
         "id": "MD030",
         "severity": Severity.CRITICAL,
@@ -217,6 +238,7 @@ RULES = [
             re.IGNORECASE
         ),
         "remediation": "Rotate the exposed credential immediately and remove from the file.",
+        "scan_code_blocks": True,
     },
     {
         "id": "MD031",
@@ -225,16 +247,16 @@ RULES = [
         "description": "Matches AWS Access Key ID or Secret Key formats.",
         "pattern": re.compile(r'(?:AKIA|AIPA|ASIA|AROA)[A-Z0-9]{16}'),
         "remediation": "Rotate the AWS key immediately and remove from the file.",
+        "scan_code_blocks": True,
     },
     {
         "id": "MD032",
         "severity": Severity.CRITICAL,
         "title": "Private key block",
         "description": "PEM private key material found in Markdown.",
-        "pattern": re.compile(
-            r'-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
-        ),
+        "pattern": re.compile(r'-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'),
         "remediation": "Remove all private key material immediately and rotate the key.",
+        "scan_code_blocks": True,
     },
     {
         "id": "MD033",
@@ -243,10 +265,10 @@ RULES = [
         "description": "Matches the ghp_, gho_, ghs_, glpat- token prefixes.",
         "pattern": re.compile(r'(?:ghp|gho|ghs|ghu|github_pat|glpat)_[A-Za-z0-9_]{20,}'),
         "remediation": "Revoke the token immediately and remove from the file.",
+        "scan_code_blocks": True,
     },
 
     # ── Suspicious File References ─────────────────────────────────────────
-
     {
         "id": "MD040",
         "severity": Severity.HIGH,
@@ -257,6 +279,7 @@ RULES = [
             re.IGNORECASE
         ),
         "remediation": "Verify the linked file is legitimate and expected.",
+        "scan_code_blocks": False,
     },
     {
         "id": "MD041",
@@ -265,10 +288,10 @@ RULES = [
         "description": "../ sequences in links or paths may attempt directory traversal.",
         "pattern": re.compile(r'(?:\.\./){2,}'),
         "remediation": "Use absolute paths or remove the traversal sequence.",
+        "scan_code_blocks": False,
     },
 
     # ── Metadata & Frontmatter Abuse ───────────────────────────────────────
-
     {
         "id": "MD050",
         "severity": Severity.MEDIUM,
@@ -276,8 +299,85 @@ RULES = [
         "description": "Frontmatter keys like 'exec', 'run', or 'script' may be processed by static site generators.",
         "pattern": re.compile(r'^(?:exec|run|script|command|hook|plugin)\s*:', re.MULTILINE | re.IGNORECASE),
         "remediation": "Remove executable keys from YAML frontmatter.",
+        "scan_code_blocks": False,
     },
 ]
+
+
+# ─────────────────────────────────────────────
+#  Content Preprocessing Helpers
+# ─────────────────────────────────────────────
+
+# Fenced code blocks (``` or ~~~, with optional language tag)
+_FENCE_RE = re.compile(
+    r'^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*$',
+    re.MULTILINE
+)
+# Inline code spans  (`...`) — single backtick, no newlines inside
+_INLINE_CODE_RE = re.compile(r'(?<!`)`(?!`)[^`\n]+`(?!`)')
+
+# Ignore directive patterns
+_IGNORE_LINE_RE        = re.compile(r'<!--\s*scanner-ignore(?:\s+([\w,\s]+?))?\s*-->', re.IGNORECASE)
+_IGNORE_BLOCK_START_RE = re.compile(r'<!--\s*scanner-ignore-block\s*-->',               re.IGNORECASE)
+_IGNORE_BLOCK_END_RE   = re.compile(r'<!--\s*scanner-ignore-end\s*-->',                 re.IGNORECASE)
+
+
+def _build_code_block_mask(content: str) -> list[bool]:
+    """Per-character boolean mask: True where char is inside a code block or inline code span."""
+    mask = [False] * len(content)
+    for m in _FENCE_RE.finditer(content):
+        for i in range(m.start(), m.end()):
+            mask[i] = True
+    for m in _INLINE_CODE_RE.finditer(content):
+        for i in range(m.start(), m.end()):
+            mask[i] = True
+    return mask
+
+
+def _build_ignore_map(lines: list[str]) -> dict[int, set | None]:
+    """
+    Map 1-based line numbers → suppressed rule IDs (or None = suppress all).
+
+    Directives:
+      <!-- scanner-ignore -->               suppress all rules on the NEXT line
+      <!-- scanner-ignore MD020,MD022 -->   suppress named rules on the NEXT line
+      <!-- scanner-ignore-block -->         suppress all until scanner-ignore-end
+      <!-- scanner-ignore-end -->
+    """
+    ignore: dict[int, set | None] = {}
+    in_block = False
+
+    for idx, line in enumerate(lines):
+        lineno = idx + 1
+
+        if _IGNORE_BLOCK_END_RE.search(line):
+            in_block = False
+            continue
+
+        if _IGNORE_BLOCK_START_RE.search(line):
+            in_block = True
+            continue
+
+        if in_block:
+            ignore[lineno] = None   # suppress all
+            continue
+
+        m = _IGNORE_LINE_RE.search(line)
+        if m:
+            next_lineno = lineno + 1
+            rule_ids_str = (m.group(1) or "").strip()
+            if rule_ids_str:
+                ids = {r.strip().upper() for r in rule_ids_str.split(",")}
+                existing = ignore.get(next_lineno)
+                if existing is not None:
+                    ignore[next_lineno] = existing | ids
+                # if existing is None (suppress all), leave it
+                elif next_lineno not in ignore:
+                    ignore[next_lineno] = ids
+            else:
+                ignore[next_lineno] = None   # suppress all
+
+    return ignore
 
 
 # ─────────────────────────────────────────────
@@ -297,21 +397,37 @@ def scan_file(filepath: str, severity_threshold: Severity = Severity.LOW) -> lis
         return []
 
     lines = content.splitlines()
+    code_mask = _build_code_block_mask(content)
+    ignore_map = _build_ignore_map(lines)
+
     findings: list[Finding] = []
 
     for rule in RULES:
-        # Skip rules below severity threshold
         if severity_order.index(rule["severity"]) < threshold_idx:
             continue
 
+        scan_code = rule.get("scan_code_blocks", True)
+
         for match in rule["pattern"].finditer(content):
-            # Calculate line and column from match position
             start = match.start()
+
+            # Skip if inside code and rule doesn't fire there
+            if not scan_code and code_mask[start]:
+                continue
+
+            # Determine line/column
             line_num = content[:start].count("\n") + 1
             line_start = content.rfind("\n", 0, start) + 1
             col = start - line_start + 1
 
-            # Build a brief snippet (the matched line, truncated)
+            # Check suppress map
+            suppressed = ignore_map.get(line_num)
+            if line_num in ignore_map:
+                if suppressed is None:          # suppress all
+                    continue
+                if rule["id"] in suppressed:    # suppress this rule
+                    continue
+
             raw_line = lines[line_num - 1] if line_num <= len(lines) else ""
             snippet = raw_line.strip()[:120]
 
@@ -344,7 +460,6 @@ def scan_paths(paths: list[str], recursive: bool, severity_threshold: Severity) 
                 all_findings.extend(scan_file(md_file, severity_threshold))
                 files_scanned += 1
         else:
-            # Treat as a glob
             for md_file in glob.glob(path, recursive=recursive):
                 all_findings.extend(scan_file(md_file, severity_threshold))
                 files_scanned += 1
@@ -358,11 +473,11 @@ def scan_paths(paths: list[str], recursive: bool, severity_threshold: Severity) 
 # ─────────────────────────────────────────────
 
 SEVERITY_COLORS = {
-    Severity.INFO:     "\033[36m",   # cyan
-    Severity.LOW:      "\033[34m",   # blue
-    Severity.MEDIUM:   "\033[33m",   # yellow
-    Severity.HIGH:     "\033[31m",   # red
-    Severity.CRITICAL: "\033[1;31m", # bold red
+    Severity.INFO:     "\033[36m",
+    Severity.LOW:      "\033[34m",
+    Severity.MEDIUM:   "\033[33m",
+    Severity.HIGH:     "\033[31m",
+    Severity.CRITICAL: "\033[1;31m",
 }
 RESET = "\033[0m"
 
@@ -370,7 +485,6 @@ RESET = "\033[0m"
 def format_console(findings: list[Finding], no_color: bool = False) -> str:
     if not findings:
         return "✅  No issues found.\n"
-
     lines = []
     for f in findings:
         color = "" if no_color else SEVERITY_COLORS.get(f.severity, "")
@@ -390,11 +504,7 @@ def format_json(findings: list[Finding]) -> str:
 
 
 def format_github_annotations(findings: list[Finding]) -> str:
-    """
-    Emit GitHub Actions workflow commands so findings appear as
-    inline annotations on the PR diff.
-    """
-    lines = []
+    """Emit GitHub Actions workflow commands for inline PR annotations."""
     level_map = {
         Severity.INFO:     "notice",
         Severity.LOW:      "notice",
@@ -402,6 +512,7 @@ def format_github_annotations(findings: list[Finding]) -> str:
         Severity.HIGH:     "error",
         Severity.CRITICAL: "error",
     }
+    lines = []
     for f in findings:
         level = level_map[f.severity]
         msg = f"{f.rule_id}: {f.title} — {f.description}"
@@ -413,9 +524,7 @@ def format_github_annotations(findings: list[Finding]) -> str:
 
 
 def format_sarif(findings: list[Finding]) -> str:
-    """
-    SARIF 2.1.0 output — compatible with GitHub Code Scanning.
-    """
+    """SARIF 2.1.0 — compatible with GitHub Code Scanning."""
     severity_map = {
         Severity.INFO:     ("note",    "none"),
         Severity.LOW:      ("note",    "low"),
@@ -423,15 +532,15 @@ def format_sarif(findings: list[Finding]) -> str:
         Severity.HIGH:     ("error",   "high"),
         Severity.CRITICAL: ("error",   "critical"),
     }
+    numeric = {"critical": "9.5", "high": "7.5", "medium": "5.0", "low": "2.5", "none": "0.0"}
 
-    rules = []
-    rule_ids_seen = set()
-    results = []
+    rules, results = [], []
+    seen: set[str] = set()
 
     for f in findings:
-        if f.rule_id not in rule_ids_seen:
-            rule_ids_seen.add(f.rule_id)
-            level, security_severity = severity_map[f.severity]
+        if f.rule_id not in seen:
+            seen.add(f.rule_id)
+            _, sec_sev = severity_map[f.severity]
             rules.append({
                 "id": f.rule_id,
                 "name": f.title.replace(" ", ""),
@@ -439,13 +548,10 @@ def format_sarif(findings: list[Finding]) -> str:
                 "fullDescription": {"text": f.description},
                 "help": {"text": f.remediation},
                 "properties": {
-                    "security-severity": {"critical": "9.5", "high": "7.5",
-                                          "medium": "5.0", "low": "2.5", "none": "0.0"
-                                          }.get(security_severity, "0.0"),
+                    "security-severity": numeric.get(sec_sev, "0.0"),
                     "tags": ["security", "markdown"],
                 },
             })
-
         level, _ = severity_map[f.severity]
         results.append({
             "ruleId": f.rule_id,
@@ -459,22 +565,16 @@ def format_sarif(findings: list[Finding]) -> str:
             }],
         })
 
-    sarif = {
+    return json.dumps({
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
         "version": "2.1.0",
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "md-security-scanner",
-                    "version": "1.0.0",
-                    "informationUri": "https://github.com/your-org/md-security-scanner",
-                    "rules": rules,
-                }
-            },
-            "results": results,
-        }],
-    }
-    return json.dumps(sarif, indent=2)
+        "runs": [{"tool": {"driver": {
+            "name": "md-security-scanner",
+            "version": "1.1.0",
+            "informationUri": "https://github.com/your-org/md-security-scanner",
+            "rules": rules,
+        }}, "results": results}],
+    }, indent=2)
 
 
 # ─────────────────────────────────────────────
@@ -494,49 +594,44 @@ Examples:
   python scanner.py docs/ --format sarif        # SARIF for Code Scanning
   python scanner.py docs/ --severity high       # only high/critical
   python scanner.py docs/ --fail-on medium      # exit 1 if medium+ found
+
+Suppressing false positives in your Markdown:
+  <!-- scanner-ignore -->                next line: suppress all rules
+  <!-- scanner-ignore MD020,MD022 -->    next line: suppress named rules
+  <!-- scanner-ignore-block -->          suppress all rules until:
+  <!-- scanner-ignore-end -->
         """,
     )
-    parser.add_argument("paths", nargs="+", help="Files, directories, or globs to scan.")
-    parser.add_argument("-r", "--recursive", action="store_true", default=True,
-                        help="Recurse into subdirectories (default: true).")
-    parser.add_argument("--format", choices=["console", "json", "github", "sarif"],
-                        default="console", help="Output format.")
-    parser.add_argument("--severity", choices=[s.value for s in Severity],
-                        default="low", help="Minimum severity to report.")
-    parser.add_argument("--fail-on", choices=[s.value for s in Severity],
-                        default="high",
-                        help="Exit with code 1 if any finding meets this severity (default: high).")
-    parser.add_argument("--no-color", action="store_true",
-                        help="Disable ANSI color codes in console output.")
-    parser.add_argument("--output", "-o", help="Write output to a file instead of stdout.")
+    parser.add_argument("paths", nargs="+")
+    parser.add_argument("-r", "--recursive", action="store_true", default=True)
+    parser.add_argument("--format", choices=["console", "json", "github", "sarif"], default="console")
+    parser.add_argument("--severity", choices=[s.value for s in Severity], default="low")
+    parser.add_argument("--fail-on", choices=[s.value for s in Severity], default="high")
+    parser.add_argument("--no-color", action="store_true")
+    parser.add_argument("--output", "-o")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-
     severity_threshold = Severity(args.severity)
     fail_threshold = Severity(args.fail_on)
 
     findings = scan_paths(args.paths, args.recursive, severity_threshold)
 
-    # Sort: critical first
     severity_order = list(Severity)
     findings.sort(key=lambda f: severity_order.index(f.severity), reverse=True)
 
-    # Format output
-    if args.format == "console":
+    fmt = args.format
+    if fmt == "console":
         output = format_console(findings, no_color=args.no_color)
-    elif args.format == "json":
+    elif fmt == "json":
         output = format_json(findings)
-    elif args.format == "github":
+    elif fmt == "github":
         output = format_github_annotations(findings)
-    elif args.format == "sarif":
-        output = format_sarif(findings)
     else:
-        output = format_console(findings, no_color=args.no_color)
+        output = format_sarif(findings)
 
-    # Write or print
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
             fh.write(output)
@@ -544,11 +639,9 @@ def main():
     else:
         print(output)
 
-    # Also emit GitHub annotations when running inside Actions
-    if os.getenv("GITHUB_ACTIONS") and args.format != "github":
+    if os.getenv("GITHUB_ACTIONS") and fmt != "github":
         print(format_github_annotations(findings))
 
-    # Exit code
     fail_idx = severity_order.index(fail_threshold)
     for f in findings:
         if severity_order.index(f.severity) >= fail_idx:
@@ -557,5 +650,7 @@ def main():
     sys.exit(0)
 
 
+if __name__ == "__main__":
+    main()
 if __name__ == "__main__":
     main()
