@@ -185,4 +185,6 @@ No other changes needed.
 
 ## License
 
-MIT
+Copyright 2024 MDGuard Contributors
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
