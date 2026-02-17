@@ -1,9 +1,146 @@
-name: Markdown Malware Scanner
-description: Scan Markdown files for hidden malware
+name: "Markdown Security Scanner"
+description: >
+  Scans Markdown files for hidden comments, obfuscated content,
+  embedded credentials, and malware delivery patterns.
+  Produces inline PR annotations and optional SARIF output for
+  GitHub Code Scanning.
+
+author: "your-org"
+
 branding:
-  icon: shield
-  color: red
+  icon: "shield"
+  color: "red"
+
+inputs:
+  paths:
+    description: >
+      Space-separated list of files, directories, or glob patterns to scan.
+      Defaults to the entire repository.
+    required: false
+    default: "."
+
+  severity:
+    description: >
+      Minimum severity level to report.
+      One of: info | low | medium | high | critical
+    required: false
+    default: "low"
+
+  fail-on:
+    description: >
+      Exit with a non-zero code (failing the workflow) if any finding
+      meets or exceeds this severity.
+      One of: info | low | medium | high | critical
+    required: false
+    default: "high"
+
+  format:
+    description: >
+      Output format. Choose from: console | json | github | sarif
+      Use 'sarif' to upload results to GitHub Code Scanning.
+    required: false
+    default: "github"
+
+  output-file:
+    description: >
+      Optional path to write output to (e.g., results.sarif).
+      If omitted, output goes to stdout.
+    required: false
+    default: ""
+
+  recursive:
+    description: "Recurse into subdirectories."
+    required: false
+    default: "true"
+
+outputs:
+  findings-count:
+    description: "Total number of findings across all scanned files."
+    value: ${{ steps.scan.outputs.findings_count }}
+
+  critical-count:
+    description: "Number of CRITICAL severity findings."
+    value: ${{ steps.scan.outputs.critical_count }}
+
+  high-count:
+    description: "Number of HIGH severity findings."
+    value: ${{ steps.scan.outputs.high_count }}
+
+  sarif-path:
+    description: "Path to the generated SARIF file (if format is sarif)."
+    value: ${{ steps.scan.outputs.sarif_path }}
 
 runs:
-  using: docker
-  image: Dockerfile
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Run Markdown Security Scanner
+      id: scan
+      shell: bash
+      run: |
+        # ── Build argument list ──────────────────────────────────────────
+        ARGS="${{ inputs.paths }}"
+        ARGS="$ARGS --severity ${{ inputs.severity }}"
+        ARGS="$ARGS --fail-on ${{ inputs.fail-on }}"
+        ARGS="$ARGS --format ${{ inputs.format }}"
+
+        if [ "${{ inputs.recursive }}" = "true" ]; then
+          ARGS="$ARGS --recursive"
+        fi
+
+        OUTPUT_FILE="${{ inputs.output-file }}"
+        if [ -n "$OUTPUT_FILE" ]; then
+          ARGS="$ARGS --output $OUTPUT_FILE"
+          echo "sarif_path=$OUTPUT_FILE" >> "$GITHUB_OUTPUT"
+        fi
+
+        # ── Run scanner ─────────────────────────────────────────────────
+        echo "::group::Markdown Security Scanner"
+        python "${{ github.action_path }}/scanner.py" $ARGS
+        EXIT_CODE=$?
+        echo "::endgroup::"
+
+        # ── Emit summary counts from JSON (best-effort) ──────────────────
+        if command -v python3 &>/dev/null; then
+          COUNT=$(python3 - <<'PYEOF'
+        import subprocess, json, sys
+        try:
+            result = subprocess.run(
+                ["python3", "${{ github.action_path }}/scanner.py",
+                 "${{ inputs.paths }}", "--format", "json",
+                 "--severity", "${{ inputs.severity }}"],
+                capture_output=True, text=True
+            )
+            data = json.loads(result.stdout or "[]")
+            total    = len(data)
+            critical = sum(1 for f in data if f["severity"] == "critical")
+            high     = sum(1 for f in data if f["severity"] == "high")
+            print(f"{total} {critical} {high}")
+        except Exception:
+            print("0 0 0")
+        PYEOF
+          )
+          read -r TOTAL CRIT HIGH <<< "$COUNT"
+          echo "findings_count=$TOTAL"   >> "$GITHUB_OUTPUT"
+          echo "critical_count=$CRIT"   >> "$GITHUB_OUTPUT"
+          echo "high_count=$HIGH"        >> "$GITHUB_OUTPUT"
+
+          # Job summary
+          cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
+        ## 🛡️ Markdown Security Scan Results
+
+        | Metric | Count |
+        |--------|-------|
+        | Total findings | $TOTAL |
+        | 🔴 Critical | $CRIT |
+        | 🟠 High | $HIGH |
+
+        > Threshold: fail on **${{ inputs.fail-on }}** or above.
+        SUMMARY
+        fi
+
+        exit $EXIT_CODE
