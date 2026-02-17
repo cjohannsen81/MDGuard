@@ -18,6 +18,7 @@ import json
 import argparse
 import glob
 from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Set
 from enum import Enum
 
 
@@ -322,7 +323,7 @@ _IGNORE_BLOCK_START_RE = re.compile(r'<!--\s*scanner-ignore-block\s*-->',       
 _IGNORE_BLOCK_END_RE   = re.compile(r'<!--\s*scanner-ignore-end\s*-->',                 re.IGNORECASE)
 
 
-def _build_code_block_mask(content: str) -> list[bool]:
+def _build_code_block_mask(content: str) -> List[bool]:
     """Per-character boolean mask: True where char is inside a code block or inline code span."""
     mask = [False] * len(content)
     for m in _FENCE_RE.finditer(content):
@@ -334,7 +335,7 @@ def _build_code_block_mask(content: str) -> list[bool]:
     return mask
 
 
-def _build_ignore_map(lines: list[str]) -> dict[int, set | None]:
+def _build_ignore_map(lines: List[str]) -> Dict[int, Optional[Set[str]]]:
     """
     Map 1-based line numbers → suppressed rule IDs (or None = suppress all).
 
@@ -344,7 +345,7 @@ def _build_ignore_map(lines: list[str]) -> dict[int, set | None]:
       <!-- scanner-ignore-block -->         suppress all until scanner-ignore-end
       <!-- scanner-ignore-end -->
     """
-    ignore: dict[int, set | None] = {}
+    ignore: Dict[int, Optional[Set[str]]] = {}
     in_block = False
 
     for idx, line in enumerate(lines):
@@ -384,7 +385,7 @@ def _build_ignore_map(lines: list[str]) -> dict[int, set | None]:
 #  Scanner
 # ─────────────────────────────────────────────
 
-def scan_file(filepath: str, severity_threshold: Severity = Severity.LOW) -> list[Finding]:
+def scan_file(filepath: str, severity_threshold: Severity = Severity.LOW) -> List[Finding]:
     """Scan a single Markdown file and return a list of findings."""
     severity_order = list(Severity)
     threshold_idx = severity_order.index(severity_threshold)
@@ -400,7 +401,7 @@ def scan_file(filepath: str, severity_threshold: Severity = Severity.LOW) -> lis
     code_mask = _build_code_block_mask(content)
     ignore_map = _build_ignore_map(lines)
 
-    findings: list[Finding] = []
+    findings: List[Finding] = []
 
     for rule in RULES:
         if severity_order.index(rule["severity"]) < threshold_idx:
@@ -446,8 +447,8 @@ def scan_file(filepath: str, severity_threshold: Severity = Severity.LOW) -> lis
     return findings
 
 
-def scan_paths(paths: list[str], recursive: bool, severity_threshold: Severity) -> list[Finding]:
-    all_findings: list[Finding] = []
+def scan_paths(paths: List[str], recursive: bool, severity_threshold: Severity) -> List[Finding]:
+    all_findings: List[Finding] = []
     files_scanned = 0
 
     for path in paths:
@@ -482,7 +483,7 @@ SEVERITY_COLORS = {
 RESET = "\033[0m"
 
 
-def format_console(findings: list[Finding], no_color: bool = False) -> str:
+def format_console(findings: List[Finding], no_color: bool = False) -> str:
     if not findings:
         return "✅  No issues found.\n"
     lines = []
@@ -499,11 +500,11 @@ def format_console(findings: list[Finding], no_color: bool = False) -> str:
     return "\n".join(lines)
 
 
-def format_json(findings: list[Finding]) -> str:
+def format_json(findings: List[Finding]) -> str:
     return json.dumps([f.to_dict() for f in findings], indent=2)
 
 
-def format_github_annotations(findings: list[Finding]) -> str:
+def format_github_annotations(findings: List[Finding]) -> str:
     """Emit GitHub Actions workflow commands for inline PR annotations."""
     level_map = {
         Severity.INFO:     "notice",
@@ -523,7 +524,7 @@ def format_github_annotations(findings: list[Finding]) -> str:
     return "\n".join(lines)
 
 
-def format_sarif(findings: list[Finding]) -> str:
+def format_sarif(findings: List[Finding]) -> str:
     """SARIF 2.1.0 — compatible with GitHub Code Scanning."""
     severity_map = {
         Severity.INFO:     ("note",    "none"),
@@ -535,7 +536,7 @@ def format_sarif(findings: list[Finding]) -> str:
     numeric = {"critical": "9.5", "high": "7.5", "medium": "5.0", "low": "2.5", "none": "0.0"}
 
     rules, results = [], []
-    seen: set[str] = set()
+    seen: Set[str] = set()
 
     for f in findings:
         if f.rule_id not in seen:
@@ -650,7 +651,5 @@ def main():
     sys.exit(0)
 
 
-if __name__ == "__main__":
-    main()
 if __name__ == "__main__":
     main()
