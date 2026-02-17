@@ -1,11 +1,8 @@
 name: "Markdown Security Scanner"
 description: >
-  Scans Markdown files for hidden comments, obfuscated content,
-  embedded credentials, and malware delivery patterns.
-  Produces inline PR annotations and optional SARIF output for
-  GitHub Code Scanning.
+  Scans Markdown for hidden comments, credentials, and malware patterns. Zero dependencies, Python 3.8+.
 
-author: "your-org"
+author: "Christian Johannsen | cjohannsen1981@gmail.com | cjohannsen81"
 
 branding:
   icon: "shield"
