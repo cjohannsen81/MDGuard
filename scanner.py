@@ -270,7 +270,7 @@ RULES = [
             re.IGNORECASE
         ),
         "remediation": "Never pipe remote content to a shell. Download and inspect scripts first.",
-        "scan_code_blocks": False,
+        "scan_code_blocks": True,  # Installation commands get copy-pasted
     },
     {
         "id": "MD025",
@@ -279,7 +279,7 @@ RULES = [
         "description": "eval() of dynamic content is a common code injection vector.",
         "pattern": re.compile(r'\beval\s*\(', re.IGNORECASE),
         "remediation": "Avoid eval(); use safer alternatives.",
-        "scan_code_blocks": False,
+        "scan_code_blocks": True,
     },
 
     # ── Credential & Secret Leakage ────────────────────────────────────────
@@ -435,7 +435,7 @@ RULES = [
             re.IGNORECASE
         ),
         "remediation": "Use permanent URLs or document expiration dates clearly.",
-        "scan_code_blocks": False,
+        "scan_code_blocks": True,
     },
 ]
 
